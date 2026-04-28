@@ -1,0 +1,7 @@
+.env
+.venv/
+downloads/*
+transcripts/*
+results/*
+__pycache__/
+cache/

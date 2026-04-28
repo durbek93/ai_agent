@@ -1,0 +1,7 @@
+yt-dlp
+curl-cffi
+openai-whisper
+google-genai
+python-dotenv
+edge-tts
+aiogram
