@@ -52,7 +52,7 @@ python main.py
 ### Локальная пакетная обработка (без Telegram)
 Если нужно обработать список ссылок локально в консоли:
 ```bash
-python mainn
+python localmain.py
 ```
 
 ### Запуск через Docker 🐳
