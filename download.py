@@ -8,8 +8,8 @@ def download_video(url):
 
     # Настройки yt-dlp (План "Спецназ" для обхода блокировок)
     ydl_opts = {
-        'cookiefile': 'www.youtube.com_cookies.txt', # Твой файл с куками 
-        'format': 'bestvideo+bestaudio/best',        # Максимальное качество
+        'cookiefile': 'downloads/cookies.txt', # Твой файл с куками 
+        'format': 'bestaudio/best',        # Максимальное качество
         'outtmpl': 'downloads/%(title)s.%(ext)s',    # Путь сохранения файла
         'merge_output_format': 'mp4',                # Склеиваем с помощью FFmpeg
         

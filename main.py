@@ -8,6 +8,7 @@ from aiogram.types import FSInputFile
 from datetime import datetime
 import yt_dlp
 import whisper
+import re
 from google import genai
 from dotenv import load_dotenv
 
@@ -33,17 +34,36 @@ except Exception as e:
 whisper_model = whisper.load_model("base") # Используем базовую модель
 print("✅ Системы готовы к работе.\n")
 
-def process_video(url):
-    # Генерируем уникальное имя на основе точного времени
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+def process_video(url, loop=None, status_msg=None):
+    def update_status(text):
+        print(text)
+        if loop and status_msg:
+            try:
+                asyncio.run_coroutine_threadsafe(status_msg.edit_text(text), loop)
+            except:
+                pass
+
+    update_status("🔍 [1/5] Получаю информацию о видео...")
+    try:
+        ydl_opts_info = {'quiet': True, 'cookiefile': 'downloads/cookies.txt'}
+        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+            info = ydl.extract_info(url, download=False)
+            raw_title = info.get('title', 'video')
+            clean_title = re.sub(r'[^\w\sа-яА-ЯёЁ-]', '', raw_title).strip()
+            clean_title = re.sub(r'\s+', '_', clean_title)
+            if not clean_title:
+                clean_title = datetime.now().strftime("%Y-%m-%d")
+    except Exception as e:
+        print(f"❌ Ошибка инфо: {e}")
+        clean_title = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     
-    video_path = f"downloads/{timestamp}.mp4"
-    transcript_path = f"transcripts/{timestamp}_transcript.txt"
-    result_path = f"results/{timestamp}_summary.txt"
-    audio_path = f"results/{timestamp}_audio.mp3"
+    video_path = f"downloads/{clean_title}.mp4"
+    transcript_path = f"transcripts/{clean_title}_transcript.txt"
+    result_path = f"results/{clean_title}_summary.txt"
+    audio_path = f"results/{clean_title}_audio.mp3"
 
     # --- ЭТАП 1: СКАЧИВАНИЕ ---
-    print(f"📥 Скачиваю: {url}")
+    update_status(f"📥 [2/5] Скачиваю видео:\n«{clean_title}»...")
     ydl_opts = {
         'format': 'best',
         'outtmpl': video_path,
@@ -59,7 +79,7 @@ def process_video(url):
         return # Если не скачалось, пропускаем это видео и идем дальше
 
     # --- ЭТАП 2: РАСПОЗНАВАНИЕ ---
-    print(f"🎧 Слушаю аудио и перевожу в текст...")
+    update_status(f"🎧 [3/5] Whisper распознает речь...")
     try:
         result = whisper_model.transcribe(video_path)
         transcript_text = result["text"]
@@ -73,7 +93,7 @@ def process_video(url):
 
     
     # --- ЭТАП 3: СУММАРИЗАЦИЯ GEMINI ---
-    print(f"🤖 Gemini анализирует текст (режим 80/20)...")
+    update_status(f"🤖 [4/5] Gemini анализирует текст...")
     
     prompt = f"""
 Ты — Эксперт-Аналитик 80/20. Твоя единственная цель — применять «Мышление 80/20» (Закон Парето) к любому тексту (книге, статье, рассказу), который тебе предоставляет пользователь. Ты знаешь, что Вселенная несбалансирована: 80% ценности любого текста скрыто всего в 20% его объема (а иногда это 90/10 или 99/1). Ты не делаешь обычные пересказы. Ты создаешь экстракт чистой пользы, экономя пользователю часы времени.
@@ -164,8 +184,8 @@ def process_video(url):
                 print(f"❌ Ошибка работы Gemini: {e}")
                 break
 
-   # --- ЭТАП 4: ОЗВУЧКА (TEXT-TO-SPEECH) ---
-    print(f"🎙️ Подготавливаю текст для диктора...")
+    # --- ЭТАП 4: ОЗВУЧКА ---
+    update_status("🎙️ [5/5] Создаю аудио-выжимку...")
     try:
         # Читаем красивый текст с цифрами и звездочками
         with open(result_path, "r", encoding="utf-8") as f:
@@ -232,11 +252,12 @@ async def cmd_start(message: types.Message):
 @dp.message(F.text.contains("youtu"))
 async def process_youtube_link(message: types.Message):
     url = message.text
-    status_msg = await message.answer("⏳ Принял ссылку! Начинаю скачивание и анализ...")
+    status_msg = await message.answer("⏳ Запуск конвейера...")
     
     try:
         # 4. Запуск тяжелой задачи в фоне
-        result_path, audio_path = await asyncio.to_thread(process_video, url)
+        loop = asyncio.get_running_loop()
+        result_path, audio_path = await asyncio.to_thread(process_video, url, loop, status_msg)
         
         if result_path and audio_path:
             await status_msg.edit_text("✅ Анализ завершен! Отправляю файлы...")

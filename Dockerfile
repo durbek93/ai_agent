@@ -2,7 +2,7 @@
 FROM python:3.12-slim
 
 # 2. Устанавливаем системные программы (наш любимый FFmpeg для извлечения звука)
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ffmpeg nodejs npm && rm -rf /var/lib/apt/lists/*
 
 # 3. Говорим Докеру: "Создай папку /app внутри контейнера и работай дальше из неё"
 WORKDIR /app

@@ -2,4 +2,4 @@
 
 echo "Сроим контейнер..."
 
-docker build -t ai agent .
+docker build -t ai_agent .
