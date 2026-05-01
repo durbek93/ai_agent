@@ -1,10 +1,16 @@
 #!/bin/bash
 
-echo "🚀 Запускаем ИИ-Агента..."
+echo "🚀 Запускаем ИИ-Агента на Oracle Cloud (ARM)..."
 
-docker run -it --rm --gpus all --env-file .env \
+# 1. Удаляем старый контейнер, если он завис или существует
+docker stop my_ai_bot || true
+docker rm my_ai_bot || true
+
+# 2. Запуск новой версии
+docker run -d \
+  --name my_ai_bot \
+  --restart unless-stopped \
+  --env-file .env \
   -v "$(pwd)/downloads:/app/downloads" \
-  -v "$(pwd)/transcripts:/app/transcripts" \
   -v "$(pwd)/results:/app/results" \
-  -v "$(pwd)/cache:/root/.cache/whisper" \
-  ai_agent
+  ai_agent python3 -u secondmain.py 

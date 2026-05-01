@@ -89,21 +89,42 @@ def analyze_audio(url, loop=None, status_msg=None):
         if loop and status_msg:
             try:
                 asyncio.run_coroutine_threadsafe(status_msg.edit_text(text), loop)
-            except:
+            except Exception:
                 pass
 
     update_status("🔍 [1/4] Получаю информацию о видео...")
-    
+
+    # Общие настройки yt-dlp: маскировка, обход блокировок, выбор плеера.
+    # Используются в обоих вызовах — при получении метаданных и при скачивании.
+    YDL_BASE_OPTS = {
+        'quiet': True,
+        'cookiefile': 'downloads/cookies.txt',
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36'
+        },
+        'js_runtimes': {
+            'node': {
+                'path': '/usr/bin/node'
+            }
+        },
+        'extractor_args': {
+            'youtube': {
+                # web-клиент поддерживает cookies и может обходить n-challenge благодаря yt-dlp-ejs и node
+                'player_client': ['web'],
+            }
+        }
+    }
+
     try:
-        ydl_opts_info = {'quiet': True, 'cookiefile': 'downloads/cookies.txt'}
-        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+        with yt_dlp.YoutubeDL(YDL_BASE_OPTS) as ydl:
             info = ydl.extract_info(url, download=False)
             raw_title = info.get('title', 'video')
             # Оставляем только буквы, цифры, пробелы и базовые знаки
             clean_title = re.sub(r'[^\w\sа-яА-ЯёЁ-]', '', raw_title).strip()
-            clean_title = re.sub(r'\s+', '_', clean_title) # пробелы в подчеркивания
+            clean_title = re.sub(r'\s+', '_', clean_title)  # пробелы в подчеркивания
             if not clean_title:
                 clean_title = datetime.now().strftime("%Y-%m-%d")
+            clean_title = clean_title[:100]  # Ограничиваем длину имени
     except Exception as e:
         print(f"❌ Ошибка инфо: {e}")
         clean_title = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -111,10 +132,12 @@ def analyze_audio(url, loop=None, status_msg=None):
     audio_path = f"downloads/{clean_title}.mp3"
     result_path = f"results/{clean_title}_summary.txt"
     tts_audio_path = f"results/{clean_title}_voice.mp3"
+    uploaded_file = None
 
     # ЭТАП 1: Скачивание аудио (быстрый режим)
     update_status(f"📥 [2/4] Скачиваю аудио:\n«{clean_title}»...")
     ydl_opts = {
+        **YDL_BASE_OPTS,  # Все общие настройки (маскировка, плееры) наследуем
         'format': 'bestaudio/best',
         'outtmpl': f"downloads/{clean_title}",
         'postprocessors': [{
@@ -122,10 +145,8 @@ def analyze_audio(url, loop=None, status_msg=None):
             'preferredcodec': 'mp3',
             'preferredquality': '128',
         }],
-        'quiet': True,
-        'cookiefile': 'downloads/cookies.txt'
     }
-    
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
@@ -134,7 +155,7 @@ def analyze_audio(url, loop=None, status_msg=None):
         return None, None
 
     # ЭТАП 2: Загрузка в облако Gemini
-    update_status(f"📤 [3/4] Загружаю в Google Cloud...")
+    update_status("📤 [3/4] Загружаю в Google Cloud...")
     try:
         uploaded_file = client.files.upload(file=audio_path)
         
@@ -144,14 +165,21 @@ def analyze_audio(url, loop=None, status_msg=None):
             time.sleep(2)
             uploaded_file = client.files.get(name=uploaded_file.name)
 
+        if uploaded_file.state.name == "FAILED":
+            print("❌ Ошибка: файл не прошел обработку в Gemini.")
+            return None, None
+
         # ЭТАП 3: Анализ 80/20 (добавляем цикл попыток)
         for attempt in range(3):
             try:
-                update_status(f"🤖 [4/4] ИИ анализирует аудио...")
+                update_status("🤖 [4/4] ИИ анализирует аудио...")
                 response = client.models.generate_content(
                     model='gemini-2.5-flash', # Сменили модель из-за жестких лимитов 2.0
                     contents=[uploaded_file, PROMPT_80_20]
                 )
+                
+                if not response.text:
+                    raise ValueError("Ответ от API пустой (возможно, фильтр безопасности)")
                 
                 # Сохраняем текстовый результат
                 with open(result_path, "w", encoding="utf-8") as f:
@@ -159,7 +187,6 @@ def analyze_audio(url, loop=None, status_msg=None):
                 break # Успех, выходим из цикла попыток
                 
             except Exception as e:
-                import re
                 error_msg = str(e)
                 if ("503" in error_msg or "429" in error_msg) and attempt < 2:
                     wait_time = 5 if "503" in error_msg else 30
@@ -174,43 +201,47 @@ def analyze_audio(url, loop=None, status_msg=None):
                 else:
                     raise e # Пробрасываем ошибку дальше, если попытки кончились
 
+        # ЭТАП 4: Озвучка выжимки (TTS)
+        update_status("🎙️ Создаю аудио-выжимку...")
+        try:
+            clean_text = response.text.replace('*', '').replace('#', '')
+            # Самый надежный способ: сохранить текст во временный файл, чтобы избежать Command Injection
+            clean_path = f"results/{clean_title}_clean.txt"
+            with open(clean_path, "w", encoding="utf-8") as f:
+                f.write(clean_text)
+                
+            voice = "ru-RU-DmitryNeural"
+            exit_code = os.system(f'edge-tts --voice {voice} -f "{clean_path}" --write-media "{tts_audio_path}"')
+            
+            if exit_code != 0 or not os.path.exists(tts_audio_path):
+                tts_audio_path = None
+            
+            # Удаляем временный файл текста
+            if os.path.exists(clean_path):
+                os.remove(clean_path)
+                
+        except Exception as e:
+            print(f"⚠️ Ошибка TTS: {e}")
+            tts_audio_path = None
+
+        return result_path, tts_audio_path
+
     except Exception as e:
-        print(f"❌ Ошибка ИИ: {e}")
+        print(f"❌ Ошибка конвейера ИИ: {e}")
         return None, None
         
     finally:
         # ЧИСТКА ОБЛАКА: Гарантированно удаляем файл из Google, даже если была ошибка
         try:
-            if 'uploaded_file' in locals() and uploaded_file:
+            if uploaded_file:
                 client.files.delete(name=uploaded_file.name)
                 print("\n🧹 Файл удален из Google Cloud.")
-        except:
+        except Exception as e:
             pass
-
-    # ЭТАП 4: Озвучка выжимки (TTS)
-    update_status("🎙️ Создаю аудио-выжимку...")
-    try:
-        clean_text = response.text.replace('*', '').replace('#', '')
-        # Самый надежный способ: сохранить текст во временный файл, чтобы избежать Command Injection
-        clean_path = f"results/{clean_title}_clean.txt"
-        with open(clean_path, "w", encoding="utf-8") as f:
-            f.write(clean_text)
             
-        voice = "ru-RU-DmitryNeural"
-        os.system(f'edge-tts --voice {voice} -f "{clean_path}" --write-media "{tts_audio_path}"')
-        
-        # Удаляем временный файл текста
-        if os.path.exists(clean_path):
-            os.remove(clean_path)
-            
-    except Exception as e:
-        print(f"⚠️ Ошибка TTS: {e}")
-
-    # ЭТАП 5: Удаление локального тяжелого аудио
-    if os.path.exists(audio_path):
-        os.remove(audio_path)
-        
-    return result_path, tts_audio_path
+        # ЭТАП 5: Удаление локального тяжелого аудио
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
 
 # --- ТЕЛЕГРАМ БОТ ---
 
@@ -225,18 +256,24 @@ async def cmd_start(message: types.Message):
 async def handle_link(message: types.Message):
     status = await message.answer("⏳ Запуск конвейера...")
     
-    # Запускаем тяжелую логику в отдельном потоке, чтобы бот не «завис»
+    # ИЩЕМ ЧИСТУЮ ССЫЛКУ В ТЕКСТЕ СООБЩЕНИЯ
+    url_match = re.search(r'(https?://[^\s]+)', message.text)
+    if not url_match:
+        await status.edit_text("❌ Не смог найти правильную ссылку в сообщении.")
+        return
+        
+    clean_url = url_match.group(1) # Берем только найденный URL
+    
+    # Запускаем тяжелую логику, передавая ЧИСТУЮ ссылку (clean_url)
     loop = asyncio.get_running_loop()
-    res_txt, res_audio = await asyncio.to_thread(analyze_audio, message.text, loop, status)
+    res_txt, res_audio = await asyncio.to_thread(analyze_audio, clean_url, loop, status)
     
     if res_txt and os.path.exists(res_txt):
         await status.edit_text("✅ Готово! Лови суть:")
         
-        # Отправляем аудио-версию
         if res_audio and os.path.exists(res_audio):
             await message.answer_audio(FSInputFile(res_audio), caption="🎧 Голосовая выжимка")
         
-        # Отправляем текст
         await message.answer_document(FSInputFile(res_txt), caption="📝 Текстовый отчет 80/20")
     else:
         await status.edit_text("❌ Что-то пошло не так. Проверь логи сервера.")
