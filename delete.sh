@@ -2,4 +2,4 @@
 
 echo "Удаляем мусор"
 
-sudo rm -rf ~/ai_agent/transcripts/*.txt ~/ai_agent/results/*.txt
+sudo rm -rf ~/ai_agent/transcripts/*.txt ~/ai_agent/results/*
