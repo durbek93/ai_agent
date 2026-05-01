@@ -129,9 +129,10 @@ def analyze_audio(url, loop=None, status_msg=None):
         print(f"❌ Ошибка инфо: {e}")
         clean_title = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    audio_path = f"downloads/{clean_title}.mp3"
-    result_path = f"results/{clean_title}_summary.txt"
-    tts_audio_path = f"results/{clean_title}_voice.mp3"
+    file_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    audio_path = f"downloads/{file_id}.mp3"
+    result_path = f"results/{file_id}_summary.txt"
+    tts_audio_path = f"results/{file_id}_voice.mp3"
     uploaded_file = None
 
     # ЭТАП 1: Скачивание аудио (быстрый режим)
@@ -139,7 +140,7 @@ def analyze_audio(url, loop=None, status_msg=None):
     ydl_opts = {
         **YDL_BASE_OPTS,  # Все общие настройки (маскировка, плееры) наследуем
         'format': 'bestaudio/best',
-        'outtmpl': f"downloads/{clean_title}",
+        'outtmpl': f"downloads/{file_id}",
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
@@ -152,7 +153,7 @@ def analyze_audio(url, loop=None, status_msg=None):
             ydl.download([url])
     except Exception as e:
         print(f"❌ Ошибка скачивания: {e}")
-        return None, None
+        return None, None, None
 
     # ЭТАП 2: Загрузка в облако Gemini
     update_status("📤 [3/4] Загружаю в Google Cloud...")
@@ -167,7 +168,7 @@ def analyze_audio(url, loop=None, status_msg=None):
 
         if uploaded_file.state.name == "FAILED":
             print("❌ Ошибка: файл не прошел обработку в Gemini.")
-            return None, None
+            return None, None, None
 
         # ЭТАП 3: Анализ 80/20 (добавляем цикл попыток)
         for attempt in range(3):
@@ -206,7 +207,7 @@ def analyze_audio(url, loop=None, status_msg=None):
         try:
             clean_text = response.text.replace('*', '').replace('#', '')
             # Самый надежный способ: сохранить текст во временный файл, чтобы избежать Command Injection
-            clean_path = f"results/{clean_title}_clean.txt"
+            clean_path = f"results/{file_id}_clean.txt"
             with open(clean_path, "w", encoding="utf-8") as f:
                 f.write(clean_text)
                 
@@ -224,11 +225,11 @@ def analyze_audio(url, loop=None, status_msg=None):
             print(f"⚠️ Ошибка TTS: {e}")
             tts_audio_path = None
 
-        return result_path, tts_audio_path
+        return result_path, tts_audio_path, clean_title
 
     except Exception as e:
         print(f"❌ Ошибка конвейера ИИ: {e}")
-        return None, None
+        return None, None, None
         
     finally:
         # ЧИСТКА ОБЛАКА: Гарантированно удаляем файл из Google, даже если была ошибка
@@ -266,15 +267,15 @@ async def handle_link(message: types.Message):
     
     # Запускаем тяжелую логику, передавая ЧИСТУЮ ссылку (clean_url)
     loop = asyncio.get_running_loop()
-    res_txt, res_audio = await asyncio.to_thread(analyze_audio, clean_url, loop, status)
+    res_txt, res_audio, clean_title = await asyncio.to_thread(analyze_audio, clean_url, loop, status)
     
     if res_txt and os.path.exists(res_txt):
         await status.edit_text("✅ Готово! Лови суть:")
         
         if res_audio and os.path.exists(res_audio):
-            await message.answer_audio(FSInputFile(res_audio), caption="🎧 Голосовая выжимка")
+            await message.answer_audio(FSInputFile(res_audio, filename=f"{clean_title}_voice.mp3"), caption="🎧 Голосовая выжимка")
         
-        await message.answer_document(FSInputFile(res_txt), caption="📝 Текстовый отчет 80/20")
+        await message.answer_document(FSInputFile(res_txt, filename=f"{clean_title}_summary.txt"), caption="📝 Текстовый отчет 80/20")
     else:
         await status.edit_text("❌ Что-то пошло не так. Проверь логи сервера.")
 
