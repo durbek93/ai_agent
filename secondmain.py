@@ -137,10 +137,25 @@ def analyze_audio(url, loop=None, status_msg=None):
 
     # ЭТАП 1: Скачивание аудио (быстрый режим)
     update_status(f"📥 [2/4] Скачиваю аудио:\n«{clean_title}»...")
+    
+    last_update_time = [time.time()]
+    def download_hook(d):
+        if d['status'] == 'downloading':
+            percent = d.get('_percent_str', '0%').strip()
+            # Убираем цветные ANSI-коды, если они есть
+            percent = re.sub(r'\x1b[^m]*m', '', percent)
+            
+            now = time.time()
+            # Обновляем статус раз в 3 секунды для предотвращения флуда
+            if now - last_update_time[0] > 3:
+                update_status(f"📥 [2/4] Скачиваю аудио: {percent}\n«{clean_title}»...")
+                last_update_time[0] = now
+
     ydl_opts = {
         **YDL_BASE_OPTS,  # Все общие настройки (маскировка, плееры) наследуем
         'format': 'bestaudio/best',
         'outtmpl': f"downloads/{file_id}",
+        'progress_hooks': [download_hook],
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
@@ -161,9 +176,13 @@ def analyze_audio(url, loop=None, status_msg=None):
         uploaded_file = client.files.upload(file=audio_path)
         
         # Ждем обработки
+        elapsed = 0
         while uploaded_file.state.name == "PROCESSING":
             print(".", end="", flush=True)
+            if elapsed % 4 == 0:  # Обновляем бота раз в 4 секунды (снижает шанс флуда)
+                update_status(f"📤 [3/4] Облако обрабатывает файл... ({elapsed} сек)")
             time.sleep(2)
+            elapsed += 2
             uploaded_file = client.files.get(name=uploaded_file.name)
 
         if uploaded_file.state.name == "FAILED":
