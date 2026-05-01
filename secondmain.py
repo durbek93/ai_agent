@@ -175,7 +175,7 @@ def analyze_audio(url, loop=None, status_msg=None):
             try:
                 update_status("🤖 [4/4] ИИ анализирует аудио...")
                 response = client.models.generate_content(
-                    model='gemini-3-flash', # Сменили модель из-за жестких лимитов 2.0
+                    model='gemini-2.5-flash', # Сменили модель из-за жестких лимитов 2.0
                     contents=[uploaded_file, PROMPT_80_20]
                 )
                 
