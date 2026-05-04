@@ -13,4 +13,4 @@ docker run -d \
   --env-file .env \
   -v "$(pwd)/downloads:/app/downloads" \
   -v "$(pwd)/results:/app/results" \
-  ai_agent python3 -u secondmain.py 
+  ai_agent python3 -u duplicatmain.py 

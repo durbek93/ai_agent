@@ -87,12 +87,14 @@ def analyze_audio(url, loop=None, status_msg=None):
     def update_status(text):
         print(text)
         if loop and status_msg:
-            try:
-                asyncio.run_coroutine_threadsafe(status_msg.edit_text(text), loop)
-            except Exception:
-                pass
+            async def _edit():
+                try:
+                    await status_msg.edit_text(text)
+                except Exception as e:
+                    print(f"⚠️ Ошибка редактирования TG: {e}")
+            asyncio.run_coroutine_threadsafe(_edit(), loop)
 
-    update_status("🔍 [1/4] Получаю информацию о видео...")
+    update_status("🔍 [1/5] Получаю информацию о видео...")
 
     # Общие настройки yt-dlp: маскировка, обход блокировок, выбор плеера.
     # Используются в обоих вызовах — при получении метаданных и при скачивании.
@@ -136,7 +138,7 @@ def analyze_audio(url, loop=None, status_msg=None):
     uploaded_file = None
 
     # ЭТАП 1: Скачивание аудио (быстрый режим)
-    update_status(f"📥 [2/4] Скачиваю аудио:\n«{clean_title}»...")
+    update_status(f"📥 [2/5] Скачиваю аудио:\n«{clean_title}»...")
     
     last_update_time = [time.time()]
     def download_hook(d):
@@ -148,7 +150,7 @@ def analyze_audio(url, loop=None, status_msg=None):
             now = time.time()
             # Обновляем статус раз в 3 секунды для предотвращения флуда
             if now - last_update_time[0] > 3:
-                update_status(f"📥 [2/4] Скачиваю аудио: {percent}\n«{clean_title}»...")
+                update_status(f"📥 [2/5] Скачиваю аудио: {percent}\n«{clean_title}»...")
                 last_update_time[0] = now
 
     ydl_opts = {
@@ -171,7 +173,7 @@ def analyze_audio(url, loop=None, status_msg=None):
         return None, None, None
 
     # ЭТАП 2: Загрузка в облако Gemini
-    update_status("📤 [3/4] Загружаю в Google Cloud...")
+    update_status("📤 [3/5] Загружаю в Google Cloud...")
     try:
         uploaded_file = client.files.upload(file=audio_path)
         
@@ -192,9 +194,9 @@ def analyze_audio(url, loop=None, status_msg=None):
         # ЭТАП 3: Анализ 80/20 (добавляем цикл попыток)
         for attempt in range(3):
             try:
-                update_status("🤖 [4/4] ИИ анализирует аудио...")
+                update_status("🤖 [4/5] ИИ анализирует аудио...")
                 response = client.models.generate_content(
-                    model='gemini-3-flash', # Сменили модель из-за жестких лимитов 2.0
+                    model='gemini-2.5-pro', # Сменили модель из-за жестких лимитов 2.0
                     contents=[uploaded_file, PROMPT_80_20]
                 )
                 
@@ -222,26 +224,46 @@ def analyze_audio(url, loop=None, status_msg=None):
                     raise e # Пробрасываем ошибку дальше, если попытки кончились
 
         # ЭТАП 4: Озвучка выжимки (TTS)
-        update_status("🎙️ Создаю аудио-выжимку...")
+        update_status("🎙️ [5/5] Создаю аудио-выжимку через Gemini 2.5 Flash TTS...")
         try:
             clean_text = response.text.replace('*', '').replace('#', '')
-            # Самый надежный способ: сохранить текст во временный файл, чтобы избежать Command Injection
-            clean_path = f"results/{file_id}_clean.txt"
-            with open(clean_path, "w", encoding="utf-8") as f:
-                f.write(clean_text)
-                
-            voice = "ru-RU-DmitryNeural"
-            exit_code = os.system(f'edge-tts --voice {voice} -f "{clean_path}" --write-media "{tts_audio_path}"')
             
-            if exit_code != 0 or not os.path.exists(tts_audio_path):
+            from google.genai import types as genai_types
+            
+            prompt_tts = f"Read the following text out loud, do not generate any text responses, just audio:\n\n{clean_text}"
+            tts_response = client.models.generate_content(
+                model="gemini-2.5-flash-preview-tts",
+                contents=prompt_tts,
+                config=genai_types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                )
+            )
+            
+            audio_saved = False
+            if getattr(tts_response, 'candidates', None) and len(tts_response.candidates) > 0:
+                for part in tts_response.candidates[0].content.parts:
+                    if part.inline_data:
+                        # API Gemini возвращает чистые сырые (RAW PCM) аудио-данные (24kHz, 16-bit, Mono)
+                        # Поэтому их нужно "обернуть" и сжать в MP3 с помощью ffmpeg
+                        raw_audio_path = tts_audio_path.replace(".mp3", ".raw")
+                        with open(raw_audio_path, "wb") as f:
+                            f.write(part.inline_data.data)
+                        
+                        # Конвертируем RAW PCM в валидный MP3-файл
+                        os.system(f'ffmpeg -y -f s16le -ar 24000 -ac 1 -i "{raw_audio_path}" -b:a 128k "{tts_audio_path}" -loglevel error')
+                        
+                        if os.path.exists(raw_audio_path):
+                            os.remove(raw_audio_path)
+                            
+                        audio_saved = True
+                        break
+            
+            if not audio_saved or not os.path.exists(tts_audio_path):
+                print("⚠️ Gemini не вернул аудио данные.")
                 tts_audio_path = None
-            
-            # Удаляем временный файл текста
-            if os.path.exists(clean_path):
-                os.remove(clean_path)
                 
         except Exception as e:
-            print(f"⚠️ Ошибка TTS: {e}")
+            print(f"⚠️ Ошибка Gemini TTS: {e}")
             tts_audio_path = None
 
         return result_path, tts_audio_path, clean_title
