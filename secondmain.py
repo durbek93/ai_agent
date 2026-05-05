@@ -122,8 +122,13 @@ def analyze_audio(url, loop=None, status_msg=None):
             'preferredcodec': 'mp3',
             'preferredquality': '128',
         }],
-        'quiet': True,
-        'cookiefile': 'downloads/cookies.txt'
+        'quiet': True, 
+        'cookiefile': 'downloads/cookies.txt',
+        'javascript_runtime': 'node',        # Используем Node.js для JS-задач
+        'remote_components': ['ejs:github'],  # Разрешаем загрузку солверов
+        'extractor_args': {
+            'youtube': {'player_client': ['web_creator']} # Маскировка
+        }
     }
     
     try:
