@@ -18,6 +18,7 @@ transcripts/
 results/
 cache/
 
+
 # Cookies and Credentials
 cookies.txt
 *cookies*.txt

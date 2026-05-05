@@ -1,6 +1,5 @@
 yt-dlp
-curl-cffi
-openai-whisper
+yt-dlp-ejs
 google-genai
 python-dotenv
 edge-tts
